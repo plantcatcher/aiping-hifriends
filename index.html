@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Hifriends - 和你最喜欢的角色交谈 | AI角色</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- 全屏加载弹窗：预加载角色视频/音频资源，加载完成才放行进入 -->
+  <div class="loading-overlay" id="loadingOverlay" role="dialog" aria-modal="true" aria-label="资源加载中">
+    <div class="loading-card">
+      <div class="loading-logo">
+        <div class="loading-orb" id="loadingOrb"></div>
+        <h1>HiFriends</h1>
+        <p>和你的 AI 朋友打电话</p>
+      </div>
+
+      <div class="loading-progress-wrap">
+        <div class="loading-bar"><div class="loading-bar-fill" id="loadingBarFill"></div></div>
+        <div class="loading-meta">
+          <span class="loading-pct" id="loadingPct">0%</span>
+          <span class="loading-detail" id="loadingDetail">正在准备资源…</span>
+        </div>
+      </div>
+
+      <button class="loading-refresh" id="loadingRefreshBtn" title="重新加载资源">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="23 4 23 10 17 10"/>
+          <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+        </svg>
+        <span>重新加载</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="layout">
+  <div class="app">
+    <!-- 顶部信息 -->
+    <header class="top-bar">
+      <div class="app-info">
+        <h1>HiFriends</h1>
+        <p>和你的 AI 朋友打电话</p>
+      </div>
+      <div class="top-actions">
+        <button class="icon-btn" id="memoryBtn" title="长期记忆">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/>
+            <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+          </svg>
+        </button>
+        <button class="icon-btn" id="addCharacterBtn" title="添加人物">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+            <circle cx="9" cy="7" r="4"/>
+            <line x1="19" y1="8" x2="19" y2="14"/>
+            <line x1="22" y1="11" x2="16" y2="11"/>
+          </svg>
+        </button>
+        <button class="icon-btn" id="settingsBtn" title="设置">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- 通话主区域 -->
+    <main class="call-area">
+      <!-- 控件集群：麦克风 / 状态光球 / 停止 -->
+      <div class="control-cluster" id="controlCluster">
+        <button class="ctrl-btn mic-btn" id="callBtn" title="开始通话">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="23"/>
+            <line x1="8" y1="23" x2="16" y2="23"/>
+          </svg>
+        </button>
+
+        <div class="status-orb" id="statusOrb"></div>
+
+        <button class="ctrl-btn stop-btn" id="stopBtn" title="结束通话" disabled>
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+            <rect x="6" y="6" width="12" height="12" rx="2"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- 状态文字 -->
+      <div class="status" id="status">点击麦克风开始通话</div>
+
+      <!-- 实时字幕 -->
+      <div class="subtitle" id="subtitle">
+        <span class="subtitle-user" id="subtitleUser"></span>
+        <span class="subtitle-ai" id="subtitleAI"></span>
+      </div>
+    </main>
+
+    <!-- 对话记录面板 -->
+    <div class="transcript-panel" id="transcriptPanel">
+      <div class="transcript-header">
+        <button class="icon-btn small" id="clearTranscriptBtn" title="清空">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"/>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+          </svg>
+        </button>
+      </div>
+      <div class="transcript-list" id="transcriptList"></div>
+    </div>
+
+    <!-- 记忆面板 -->
+    <div class="memory-panel" id="memoryPanel">
+      <div class="memory-header">
+        <span class="memory-title">长期记忆</span>
+        <span class="memory-count" id="memoryCount"></span>
+        <button class="icon-btn small" id="clearMemoryBtn" title="清空记忆">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"/>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+          </svg>
+        </button>
+      </div>
+      <div class="memory-list" id="memoryList"></div>
+    </div>
+
+    <!-- 文字输入栏 -->
+    <div class="text-input-bar" id="textInputBar">
+      <input type="text" id="textInput" placeholder="输入文字和 TA 聊天…" maxlength="500" autocomplete="off" enterkeyhint="send">
+      <button class="send-btn" id="sendBtn" title="发送" aria-label="发送">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="12" y1="19" x2="12" y2="5"/>
+          <polyline points="5 12 12 5 19 12"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- 右侧人物形象面板 -->
+  <div class="image-panel" id="imagePanel">
+    <!-- 微信通话式角色标识（图上方） -->
+    <div class="call-identity">
+      <div class="call-name-row">
+        <div class="call-name" id="callName" title="点击编辑名称">Helen</div>
+        <input type="text" id="callNameInput" class="call-name-input hidden" maxlength="12" autocomplete="off">
+        <button class="char-edit-btn" id="charEditBtn" title="编辑当前角色" aria-label="编辑当前角色">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <!-- disablepictureinpicture + controlslist 禁用浏览器媒体浮层（画中画/翻译音频） -->
+    <video src="assets/girlfriend.mp4" class="side-video" id="sideVideo" autoplay muted loop playsinline preload="auto" disablepictureinpicture controlslist="nodownload noplaybackrate nofullscreen"></video>
+    <div class="image-panel-overlay"></div>
+  </div>
+
+  <!-- 左右切换按钮（放 .layout 直接子级：手机端 .app 覆盖全屏会拦截 image-panel 内的点击） -->
+  <button class="char-nav char-nav-left" id="charPrev" title="上一个">‹</button>
+  <button class="char-nav char-nav-right" id="charNext" title="下一个">›</button>
+  </div>
+
+  <!-- 设置弹窗 -->
+  <div class="modal-overlay" id="settingsModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>设置</h2>
+        <button class="icon-btn" id="closeSettingsBtn">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>DeepSeek API Key</label>
+          <input type="password" id="apiKeyInput" placeholder="sk-..." autocomplete="off">
+          <small>从 <a href="https://platform.deepseek.com" target="_blank">platform.deepseek.com</a> 获取</small>
+        </div>
+
+        <div class="form-group">
+          <label>硅基流动 API Key（语音合成 / 声音克隆 / 图片生成）</label>
+          <input type="password" id="sfApiKeyInput" placeholder="sk-..." autocomplete="off">
+          <small>从 <a href="https://cloud.siliconflow.cn/account/ak" target="_blank">cloud.siliconflow.cn</a> 获取。角色配置了原声音色克隆时会自动使用克隆音色；未配置克隆时使用预设音色；留空则回退浏览器内置语音</small>
+        </div>
+
+        <div class="form-group">
+          <label class="switch-label">
+            <span>允许打断（说话时停止AI语音）</span>
+            <input type="checkbox" id="interruptToggle" checked>
+            <span class="switch"></span>
+          </label>
+        </div>
+
+        <div class="form-group">
+          <label class="switch-label">
+            <span>长期记忆（记住你说过的话）</span>
+            <input type="checkbox" id="memoryToggle" checked>
+            <span class="switch"></span>
+          </label>
+        </div>
+
+        <div class="form-group">
+          <label class="switch-label">
+            <span>原声音色克隆（名人角色用原声）</span>
+            <input type="checkbox" id="voiceCloneToggle" checked>
+            <span class="switch"></span>
+          </label>
+        </div>
+
+        <div class="form-group">
+          <button class="btn-secondary" id="testBtn">测试 DeepSeek</button>
+          <button class="btn-secondary" id="testSFBtn">测试语音合成</button>
+          <button class="btn-secondary" id="testCloneBtn">测试声音克隆</button>
+          <span id="testResult" class="test-result"></span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-primary" id="saveSettingsBtn">保存设置</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 人物编辑弹窗 -->
+  <div class="modal-overlay" id="characterModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 id="characterModalTitle">创建角色</h2>
+        <button class="icon-btn" id="closeCharacterBtn">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <!-- ① 名称 -->
+        <div class="form-group">
+          <label>角色名称</label>
+          <input type="text" id="charNameInput" placeholder="给角色起个名字" maxlength="12">
+        </div>
+
+        <!-- ② 参考图 -->
+        <div class="form-group">
+          <label>角色参考图</label>
+          <div id="charMediaPicker"></div>
+          <small>上传或粘贴参考图；留空则按描述自动生成形象</small>
+        </div>
+
+        <!-- ③ 描述人物 -->
+        <div class="form-group">
+          <label>描述人物</label>
+          <textarea id="charPromptInput" rows="5" placeholder="TA 是谁、什么性格、怎么说话…"></textarea>
+        </div>
+
+        <!-- ④ 音色 -->
+        <div class="form-group">
+          <label>音色 <span class="voice-lock-hint" id="voiceLockHint"></span></label>
+          <select id="charVoiceSelect"></select>
+          <small id="charVoiceFileHint" class="voice-file-hint hidden"></small>
+        </div>
+      </div>
+      <div class="modal-footer char-modal-footer">
+        <button class="btn-danger hidden" id="deleteCharacterBtn">删除人物</button>
+        <div class="footer-spacer"></div>
+        <button class="btn-primary char-create-btn" id="saveCharacterBtn">创建</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 加载弹窗逻辑：预加载全部角色资源，完成后进入主应用 -->
+  <script src="js/loading.js"></script>
+  <script type="module" src="js/app.js" defer></script>
+</body>
+</html>
