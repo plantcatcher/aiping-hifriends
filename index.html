@@ -3,37 +3,31 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Hifriends - 和你最喜欢的角色交谈 | AI角色</title>
+  <meta name="description" content="HiFriends - AI角色语音对话应用。与Steve Jobs、爱因斯坦、马斯克、樊振东等名人角色实时语音聊天，支持声音克隆、长期记忆、自定义角色。">
+  <meta name="keywords" content="AI对话,AI角色,语音聊天,声音克隆,Steve Jobs,爱因斯坦,马斯克,樊振东,DeepSeek,CosyVoice2">
+  <meta name="author" content="HiFriends">
+  <meta name="theme-color" content="#0a0a0f">
+  <meta property="og:title" content="HiFriends - AI角色语音对话">
+  <meta property="og:description" content="与你最喜欢的角色实时语音交谈。支持名人角色、声音克隆、自定义人设。">
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="zh_CN">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="HiFriends - AI角色语音对话">
+  <meta name="twitter:description" content="与你最喜欢的角色实时语音交谈。">
+  <title>HiFriends - 和你最喜欢的角色交谈 | AI角色语音对话</title>
+
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-6E270YGYEF"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-6E270YGYEF');
+  </script>
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-  <!-- 全屏加载弹窗：预加载角色视频/音频资源，加载完成才放行进入 -->
-  <div class="loading-overlay" id="loadingOverlay" role="dialog" aria-modal="true" aria-label="资源加载中">
-    <div class="loading-card">
-      <div class="loading-logo">
-        <div class="loading-orb" id="loadingOrb"></div>
-        <h1>HiFriends</h1>
-        <p>和你的 AI 朋友打电话</p>
-      </div>
-
-      <div class="loading-progress-wrap">
-        <div class="loading-bar"><div class="loading-bar-fill" id="loadingBarFill"></div></div>
-        <div class="loading-meta">
-          <span class="loading-pct" id="loadingPct">0%</span>
-          <span class="loading-detail" id="loadingDetail">正在准备资源…</span>
-        </div>
-      </div>
-
-      <button class="loading-refresh" id="loadingRefreshBtn" title="重新加载资源">
-        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="23 4 23 10 17 10"/>
-          <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
-        </svg>
-        <span>重新加载</span>
-      </button>
-    </div>
-  </div>
-
   <div class="layout">
   <div class="app">
     <!-- 顶部信息 -->
@@ -49,12 +43,12 @@
             <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
           </svg>
         </button>
-        <button class="icon-btn" id="addCharacterBtn" title="添加人物">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
-            <circle cx="9" cy="7" r="4"/>
-            <line x1="19" y1="8" x2="19" y2="14"/>
-            <line x1="22" y1="11" x2="16" y2="11"/>
+        <button class="icon-btn" id="allCharactersBtn" title="所有角色">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="7" height="7" rx="1.5"/>
+            <rect x="14" y="3" width="7" height="7" rx="1.5"/>
+            <rect x="3" y="14" width="7" height="7" rx="1.5"/>
+            <rect x="14" y="14" width="7" height="7" rx="1.5"/>
           </svg>
         </button>
         <button class="icon-btn" id="settingsBtn" title="设置">
@@ -68,23 +62,16 @@
 
     <!-- 通话主区域 -->
     <main class="call-area">
-      <!-- 控件集群：麦克风 / 状态光球 / 停止 -->
+      <!-- 控件集群：单控件 = 点击说话 / 再次点击暂停（含状态光球 + 麦克风图标） -->
       <div class="control-cluster" id="controlCluster">
-        <button class="ctrl-btn mic-btn" id="callBtn" title="开始通话">
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-            <line x1="12" y1="19" x2="12" y2="23"/>
-            <line x1="8" y1="23" x2="16" y2="23"/>
-          </svg>
-        </button>
-
-        <div class="status-orb" id="statusOrb"></div>
-
-        <button class="ctrl-btn stop-btn" id="stopBtn" title="结束通话" disabled>
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-            <rect x="6" y="6" width="12" height="12" rx="2"/>
-          </svg>
+        <div class="orb-pulse-rings">
+          <div class="orb-pulse-ring"></div>
+          <div class="orb-pulse-ring"></div>
+          <div class="orb-pulse-ring"></div>
+        </div>
+        <button class="status-orb" id="statusOrb" title="点击开始通话">
+          <!-- 麦克风图标独立容器：不碰 WebGL canvas，光球动效保留 -->
+          <div class="orb-mic-icon" id="orbMicIcon"></div>
         </button>
       </div>
 
@@ -101,6 +88,13 @@
     <!-- 对话记录面板 -->
     <div class="transcript-panel" id="transcriptPanel">
       <div class="transcript-header">
+        <button class="icon-btn small" id="exportTranscriptBtn" title="导出对话">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+        </button>
         <button class="icon-btn small" id="clearTranscriptBtn" title="清空">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="3 6 5 6 21 6"/>
@@ -145,12 +139,7 @@
       <div class="call-name-row">
         <div class="call-name" id="callName" title="点击编辑名称">Helen</div>
         <input type="text" id="callNameInput" class="call-name-input hidden" maxlength="12" autocomplete="off">
-        <button class="char-edit-btn" id="charEditBtn" title="编辑当前角色" aria-label="编辑当前角色">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-          </svg>
-        </button>
+        <button class="char-download-badge" id="charDownloadBadge" title="素材下载状态"></button>
       </div>
     </div>
     <!-- disablepictureinpicture + controlslist 禁用浏览器媒体浮层（画中画/翻译音频） -->
@@ -164,10 +153,10 @@
   </div>
 
   <!-- 设置弹窗 -->
-  <div class="modal-overlay" id="settingsModal">
+  <div class="modal-overlay" id="settingsModal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
     <div class="modal">
       <div class="modal-header">
-        <h2>设置</h2>
+        <h2 id="settingsTitle">设置</h2>
         <button class="icon-btn" id="closeSettingsBtn">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="18" y1="6" x2="6" y2="18"/>
@@ -177,21 +166,9 @@
       </div>
       <div class="modal-body">
         <div class="form-group">
-          <label>DeepSeek API Key</label>
-          <input type="password" id="apiKeyInput" placeholder="sk-..." autocomplete="off">
-          <small>从 <a href="https://platform.deepseek.com" target="_blank">platform.deepseek.com</a> 获取</small>
-        </div>
-
-        <div class="form-group">
-          <label>硅基流动 API Key（语音合成 / 声音克隆 / 图片生成）</label>
-          <input type="password" id="sfApiKeyInput" placeholder="sk-..." autocomplete="off">
-          <small>从 <a href="https://cloud.siliconflow.cn/account/ak" target="_blank">cloud.siliconflow.cn</a> 获取。角色配置了原声音色克隆时会自动使用克隆音色；未配置克隆时使用预设音色；留空则回退浏览器内置语音</small>
-        </div>
-
-        <div class="form-group">
           <label class="switch-label">
             <span>允许打断（说话时停止AI语音）</span>
-            <input type="checkbox" id="interruptToggle" checked>
+            <input type="checkbox" id="interruptToggle">
             <span class="switch"></span>
           </label>
         </div>
@@ -213,10 +190,13 @@
         </div>
 
         <div class="form-group">
-          <button class="btn-secondary" id="testBtn">测试 DeepSeek</button>
-          <button class="btn-secondary" id="testSFBtn">测试语音合成</button>
-          <button class="btn-secondary" id="testCloneBtn">测试声音克隆</button>
-          <span id="testResult" class="test-result"></span>
+          <div class="test-section-label">连接测试</div>
+          <div class="test-btn-row">
+            <button class="btn-secondary" id="testBtn">测试 DeepSeek</button>
+            <button class="btn-secondary" id="testSFBtn">测试语音合成</button>
+            <button class="btn-secondary" id="testCloneBtn">测试声音克隆</button>
+          </div>
+          <div class="test-result-box" id="testResult"></div>
         </div>
       </div>
       <div class="modal-footer">
@@ -225,10 +205,39 @@
     </div>
   </div>
 
-  <!-- 人物编辑弹窗 -->
-  <div class="modal-overlay" id="characterModal">
-    <div class="modal">
-      <div class="modal-header">
+  <!-- 所有角色页面（全屏覆盖层） -->
+  <div class="characters-page" id="charactersPage" role="dialog" aria-modal="true" aria-label="所有角色">
+    <div class="characters-page-header">
+      <h2>所有角色</h2>
+      <div class="char-search-bar">
+        <svg class="char-search-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="8"/>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+        <input type="text" id="charSearchInput" placeholder="搜索角色名、人设关键词…" autocomplete="off">
+      </div>
+      <div class="characters-page-actions">
+        <button class="btn-secondary btn-sm" id="pageAddCharBtn">+ 新建角色</button>
+        <button class="icon-btn" id="closeCharactersBtn" title="关闭">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div class="characters-page-body">
+      <div class="char-section-title">默认角色</div>
+      <div class="char-grid" id="charGridPresets"></div>
+      <div class="char-section-title">我创建的角色</div>
+      <div class="char-grid" id="charGridCustom"></div>
+    </div>
+  </div>
+
+  <!-- 角色编辑侧滑面板（嵌于角色页面内） -->
+  <div class="char-edit-panel-overlay" id="characterModal">
+    <div class="char-edit-panel">
+      <div class="edit-panel-header">
         <h2 id="characterModalTitle">创建角色</h2>
         <button class="icon-btn" id="closeCharacterBtn">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
@@ -237,43 +246,34 @@
           </svg>
         </button>
       </div>
-      <div class="modal-body">
-        <!-- ① 名称 -->
+      <div class="edit-panel-body">
         <div class="form-group">
           <label>角色名称</label>
           <input type="text" id="charNameInput" placeholder="给角色起个名字" maxlength="12">
         </div>
-
-        <!-- ② 参考图 -->
         <div class="form-group">
           <label>角色参考图</label>
           <div id="charMediaPicker"></div>
           <small>上传或粘贴参考图；留空则按描述自动生成形象</small>
         </div>
-
-        <!-- ③ 描述人物 -->
         <div class="form-group">
           <label>描述人物</label>
           <textarea id="charPromptInput" rows="5" placeholder="TA 是谁、什么性格、怎么说话…"></textarea>
         </div>
-
-        <!-- ④ 音色 -->
         <div class="form-group">
           <label>音色 <span class="voice-lock-hint" id="voiceLockHint"></span></label>
           <select id="charVoiceSelect"></select>
           <small id="charVoiceFileHint" class="voice-file-hint hidden"></small>
         </div>
       </div>
-      <div class="modal-footer char-modal-footer">
+      <div class="edit-panel-footer">
         <button class="btn-danger hidden" id="deleteCharacterBtn">删除人物</button>
         <div class="footer-spacer"></div>
-        <button class="btn-primary char-create-btn" id="saveCharacterBtn">创建</button>
+        <button class="btn-primary" id="saveCharacterBtn">创建</button>
       </div>
     </div>
   </div>
 
-  <!-- 加载弹窗逻辑：预加载全部角色资源，完成后进入主应用 -->
-  <script src="js/loading.js"></script>
   <script type="module" src="js/app.js" defer></script>
 </body>
 </html>

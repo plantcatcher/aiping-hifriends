@@ -6,11 +6,10 @@ import { generateImage } from './imagegen.js';
 const ACCEPT = 'image/*,video/mp4,video/webm,video/ogg,video/quicktime';
 
 export class MediaPicker {
-  constructor(container, { onChange, getSFApiKey, onRequestApiKey } = {}) {
+  constructor(container, { onChange, getSFApiKey } = {}) {
     this.container = container;
     this.onChange = onChange;
     this.getSFApiKey = getSFApiKey || (() => '');
-    this.onRequestApiKey = onRequestApiKey || null;
     this.value = '';       // 当前值：'' | URL | 'db:<id>'
     this._pending = false; // 防止重复上传/生成
     this._preview = null;  // 预览 URL
@@ -39,10 +38,6 @@ export class MediaPicker {
 
         <!-- AI 生成 -->
         <div class="media-pane hidden" data-pane="ai">
-          <div class="media-ai-nosetup hidden">
-            <p class="media-ai-nosetup-tip">AI 生成需要「硅基流动 API Key」</p>
-            <button type="button" class="btn-primary btn-sm media-ai-setup-btn">去设置填写</button>
-          </div>
           <div class="media-ai-row">
             <input type="text" class="media-ai-input" placeholder="描述形象，如：一位留着短发的年轻女性，温柔微笑，浅蓝毛衣，棚拍肖像" maxlength="200">
             <button type="button" class="btn-primary btn-sm media-ai-btn">生成</button>
@@ -61,8 +56,6 @@ export class MediaPicker {
     this.aiInput = this.container.querySelector('.media-ai-input');
     this.aiBtn = this.container.querySelector('.media-ai-btn');
     this.aiStatus = this.container.querySelector('.media-ai-status');
-    this.aiSetup = this.container.querySelector('.media-ai-nosetup');
-    this.setupBtn = this.container.querySelector('.media-ai-setup-btn');
     this.preview = this.container.querySelector('.media-preview');
     this.removeBtn = this.container.querySelector('.media-remove');
 
@@ -79,7 +72,7 @@ export class MediaPicker {
     // URL
     this.urlInput.addEventListener('change', () => this._onUrl(this.urlInput.value.trim()));
 
-    // AI 生成
+    // AI 生成（API Key 已内置，直接可用）
     this.aiBtn.addEventListener('click', () => this._onAI());
     this.aiInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
@@ -87,13 +80,6 @@ export class MediaPicker {
         this._onAI();
       }
     });
-
-    // 无 API Key 时显示「去设置」入口
-    if (this.setupBtn) {
-      this.setupBtn.addEventListener('click', () => {
-        if (this.onRequestApiKey) this.onRequestApiKey();
-      });
-    }
     this._refreshAISetup();
   }
 
@@ -146,8 +132,7 @@ export class MediaPicker {
     }
     const apiKey = this.getSFApiKey();
     if (!apiKey) {
-      this._refreshAISetup();
-      this._showAIStatus('请先填写硅基流动 API Key（点上方「去设置填写」）', 'error');
+      this._showAIStatus('硅基流动 Key 未就绪，请稍后再试', 'error');
       return;
     }
     if (this._pending) return;
@@ -177,9 +162,8 @@ export class MediaPicker {
 
   // 根据当前 API Key 状态刷新 AI 生成 tab 的入口提示与按钮可用性
   _refreshAISetup() {
-    const hasKey = !!this.getSFApiKey();
-    if (this.aiSetup) this.aiSetup.classList.toggle('hidden', hasKey);
-    if (this.aiBtn) this.aiBtn.disabled = !hasKey;
+    // API Key 已内置（config.js），AI 生成 tab 始终可用
+    if (this.aiBtn) this.aiBtn.disabled = false;
   }
 
   // 外部（如设置弹窗保存后）调用，刷新 Key 状态显示

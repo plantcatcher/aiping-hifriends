@@ -12,12 +12,46 @@ import {
   updateCharacter,
   deleteCharacter,
   isPreset,
+  isDownloaded,
+  markDownloaded,
+  getRemoteAssetURLs,
 } from './characters.js';
+import { downloadCharacterAssets } from './character-download.js';
+import { getAssets } from './asset-store.js';
 import { MediaPicker } from './media-picker.js';
 import { getMedia, isStoredMedia, saveMedia } from './media-store.js';
 import { generateImage } from './imagegen.js';
 import { saveChat, loadChat, removeChat } from './chat-store.js';
 import { Orb } from './orb.js';
+
+// ===== 焦点陷阱（弹窗内循环焦点） =====
+let _lastFocused = null;
+function trapFocus(container) {
+  _lastFocused = document.activeElement;
+  const focusable = container.querySelectorAll('button, input, select, textarea, [tabindex]:not([tabindex="-1"])');
+  if (focusable.length > 0) focusable[0].focus();
+  const handler = (e) => {
+    if (e.key !== 'Tab') return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+  container.addEventListener('keydown', handler);
+  container._focusTrapHandler = handler;
+}
+function releaseFocus(container) {
+  if (container._focusTrapHandler) {
+    container.removeEventListener('keydown', container._focusTrapHandler);
+    container._focusTrapHandler = null;
+  }
+  if (_lastFocused) _lastFocused.focus();
+}
 
 // ===== 状态机 =====
 const State = { IDLE: 'idle', LISTENING: 'listening', THINKING: 'thinking', SPEAKING: 'speaking', PAUSED: 'paused' };
@@ -35,6 +69,7 @@ let activeChar = getActiveCharacter();
 let messages = [];
 let aiResponseBuffer = '';
 let abortController = null;
+let replyGeneration = 0; // 回复代次：新消息递增，旧请求的 finally 检测到代次变化则不再恢复旧会话状态
 
 // ===== 实例 =====
 let recognizer = null;
@@ -46,18 +81,15 @@ let orb = null; // 语音状态光球（React Bits Orb 移植，纯 WebGL）
 const $ = (id) => document.getElementById(id);
 const el = {
   statusOrb: $('statusOrb'),
+  orbMicIcon: $('orbMicIcon'),
   status: $('status'),
   subtitleUser: $('subtitleUser'),
   subtitleAI: $('subtitleAI'),
-  callBtn: $('callBtn'),
-  stopBtn: $('stopBtn'),
   transcriptPanel: $('transcriptPanel'),
   transcriptList: $('transcriptList'),
   settingsBtn: $('settingsBtn'),
   settingsModal: $('settingsModal'),
   closeSettingsBtn: $('closeSettingsBtn'),
-  apiKeyInput: $('apiKeyInput'),
-  sfApiKeyInput: $('sfApiKeyInput'),
   interruptToggle: $('interruptToggle'),
   testBtn: $('testBtn'),
   testSFBtn: $('testSFBtn'),
@@ -65,6 +97,7 @@ const el = {
   testResult: $('testResult'),
   saveSettingsBtn: $('saveSettingsBtn'),
   clearTranscriptBtn: $('clearTranscriptBtn'),
+  exportTranscriptBtn: $('exportTranscriptBtn'),
 
   // 记忆相关
   memoryBtn: $('memoryBtn'),
@@ -80,8 +113,6 @@ const el = {
   callNameInput: $('callNameInput'),
   charPrev: $('charPrev'),
   charNext: $('charNext'),
-  charEditBtn: $('charEditBtn'),
-  addCharacterBtn: $('addCharacterBtn'),
   characterModal: $('characterModal'),
   characterModalTitle: $('characterModalTitle'),
   closeCharacterBtn: $('closeCharacterBtn'),
@@ -98,6 +129,16 @@ const el = {
   imagePanel: $('imagePanel'),
   sideVideo: $('sideVideo'),
 
+  // 所有角色页面
+  allCharactersBtn: $('allCharactersBtn'),
+  charactersPage: $('charactersPage'),
+  closeCharactersBtn: $('closeCharactersBtn'),
+  pageAddCharBtn: $('pageAddCharBtn'),
+  charGridPresets: $('charGridPresets'),
+  charGridCustom: $('charGridCustom'),
+  charDownloadBadge: $('charDownloadBadge'),
+  charSearchInput: $('charSearchInput'),
+
   // 文字输入
   textInputBar: $('textInputBar'),
   textInput: $('textInput'),
@@ -107,7 +148,8 @@ const el = {
 // ===== 状态切换 =====
 function setState(newState) {
   state = newState;
-  el.statusOrb.className = `status-orb ${newState}`;
+  // 光球 className：通话中保留 active（激活态辉光背景，最底层），再叠状态类（图标配色/动效驱动）
+  el.statusOrb.className = `status-orb${inCall ? ' active' : ''} ${newState}`;
   if (orb) orb.setState(newState);
   const labels = {
     [State.IDLE]: '点击麦克风开始通话',
@@ -121,16 +163,7 @@ function setState(newState) {
 
 // ===== 通话控制 =====
 async function startCall() {
-  if (!config.apiKey) {
-    openSettings();
-    el.testResult.textContent = '请先填写 DeepSeek API Key';
-    el.testResult.className = 'test-result error';
-    return;
-  }
-
   inCall = true;
-  el.callBtn.classList.add('active');
-  el.stopBtn.disabled = false;
   el.transcriptPanel.classList.add('expanded');
   // 语音通话接管会话：复用/重置 TTS，文字会话标记关闭（TTS 归通话管）
   textChat.active = false;
@@ -180,7 +213,7 @@ async function startCall() {
   // 识别成"用户说的话"发给 LLM（Helen 的"宝宝你可算来啦"被当成用户输入就是这个问题）
   if (hasGreeting) {
     setState(State.SPEAKING);
-    try { await tts.whenIdle(); } catch {}
+    try { await tts.whenIdle(); } catch (e) { console.warn('TTS whenIdle error:', e); }
   }
   startListening();
 }
@@ -188,8 +221,6 @@ async function startCall() {
 function endCall() {
   inCall = false;
   callPaused = false;
-  el.callBtn.classList.remove('active');
-  el.stopBtn.disabled = true;
 
   if (recognizer) { recognizer.stop(); recognizer = null; }
   if (tts) { tts.stop(); tts = null; }
@@ -202,9 +233,36 @@ function endCall() {
   el.status.textContent = '通话结束，可继续输入文字聊天';
 }
 
-// ===== 暂停 / 继续（点击中间光球） =====
+// ===== 中间控件：点击说话 / 再次点击暂停（未通话时点击 = 开始通话） =====
+const MIC_ICON_PAUSED = `
+  <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="2">
+    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+    <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+    <line x1="12" y1="19" x2="12" y2="23"/>
+    <line x1="8" y1="23" x2="16" y2="23"/>
+  </svg>`;
+// 暂停态：麦克风斜杠（表示"已静音/暂停"）
+const MIC_ICON_MUTED = `
+  <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="2">
+    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+    <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+    <line x1="12" y1="19" x2="12" y2="23"/>
+    <line x1="8" y1="23" x2="16" y2="23"/>
+    <line x1="3" y1="3" x2="21" y2="21"/>
+  </svg>`;
+function syncOrbIcon() {
+  // 只更新图标容器内容，绝不动 .orb-canvas（WebGL 光球动效）
+  if (el.orbMicIcon) {
+    el.orbMicIcon.innerHTML = (inCall && callPaused) ? MIC_ICON_MUTED : MIC_ICON_PAUSED;
+  }
+}
+
 function togglePause() {
-  if (!inCall) return;
+  // 未在通话：点击 = 开始通话（开麦说话）
+  if (!inCall) {
+    startCall();
+    return;
+  }
   if (callPaused) {
     resumeCall();
   } else {
@@ -222,6 +280,7 @@ function pauseCall() {
   // 暂停 TTS 播放（保留队列，恢复后可继续）
   if (tts) tts.pause();
   // 暂停时若 LLM 还在流式输出，先不打断，恢复后再播放；这里只停语音
+  syncOrbIcon();
   setState(State.PAUSED);
 }
 
@@ -231,6 +290,7 @@ function resumeCall() {
   // 恢复 TTS 播放（队列有内容则继续播）
   if (tts) tts.resume();
   if (volumeMonitor) volumeMonitor.resume();
+  syncOrbIcon();
   // 如果有待播内容或正在播放，保持发声态；否则恢复聆听
   if (state === State.PAUSED) {
     if (tts && (tts.speaking || tts.queue.length > 0 || tts.buffer)) {
@@ -364,6 +424,7 @@ async function handleUserMessage(text) {
   el.subtitleAI.textContent = '';
 
   setState(State.THINKING);
+  el.subtitleAI.innerHTML = '<span class="skeleton-dots"><span></span><span></span><span></span></span>';
 
   abortController = new AbortController();
   aiResponseBuffer = '';
@@ -446,14 +507,25 @@ let textChat = { active: false, busy: false };
 // 通话中发文字：停掉语音识别，等 AI 回完再恢复
 function sendTextMessage() {
   const text = el.textInput.value.trim();
-  if (!text || textChat.busy) return;
+  if (!text) return;
 
-  if (!config.apiKey) {
-    openSettings();
-    el.testResult.textContent = '请先填写 DeepSeek API Key';
-    el.testResult.className = 'test-result error';
-    return;
+  // AI 思考/回复中发文字 → 立即打断当前回复：
+  // 1. 停掉正在播放的语音（清队列 + 停当前音频）
+  if (tts) tts.stop();
+  // 2. 中断 LLM 流式生成；已生成的部分同步保存为 [已打断]，避免与新消息交错
+  if (abortController) {
+    abortController.abort();
+    abortController = null;
+    if (aiResponseBuffer) {
+      messages.push({ role: 'assistant', content: aiResponseBuffer });
+      persistCurrentChat();
+      addTranscriptItem('ai', aiResponseBuffer + ' [已打断]');
+      aiResponseBuffer = '';
+    }
   }
+  // 3. 重置文字会话状态，允许立刻发起新消息（不再被 busy 拦截）
+  textChat.busy = false;
+  el.sendBtn.disabled = false;
 
   el.textInput.value = '';
   textChat.busy = true;
@@ -475,6 +547,8 @@ function sendTextMessage() {
 }
 
 async function handleTextMessage(text) {
+  // 本请求代次：新消息使旧请求的 finally 失效（不再恢复旧会话状态）
+  const myGen = ++replyGeneration;
   // 新会话开场：先让角色说 Greeting
   ensureGreetingSeeded();
   el.transcriptPanel.classList.add('expanded');
@@ -525,8 +599,8 @@ async function handleTextMessage(text) {
     extractAndStoreMemories();
   } catch (e) {
     if (e.name === 'AbortError') {
-      // 被新消息打断：保留已生成的部分
-      if (aiResponseBuffer) {
+      // 被新消息打断：仅当仍是本轮请求才保存已生成部分（sendTextMessage 已同步保存过的为空，不重复）
+      if (myGen === replyGeneration && aiResponseBuffer) {
         messages.push({ role: 'assistant', content: aiResponseBuffer });
         persistCurrentChat(); // 打断也保存已生成部分
         addTranscriptItem('ai', aiResponseBuffer + ' [已打断]');
@@ -541,16 +615,19 @@ async function handleTextMessage(text) {
       el.status.textContent = '出错: ' + msg;
     }
   } finally {
-    abortController = null;
-    textChat.busy = false;
-    el.sendBtn.disabled = false;
+    // 仅当仍是本轮请求（未被新消息取代）时才清理并恢复会话状态
+    if (myGen === replyGeneration) {
+      abortController = null;
+      textChat.busy = false;
+      el.sendBtn.disabled = false;
 
-    // 通话中：恢复语音识别；纯文字模式：回到就绪态
-    if (inCall) {
-      startListening();
-    } else {
-      setState(State.IDLE);
-      el.status.textContent = textChat.active ? '继续输入文字聊天，或点麦克风语音通话' : '';
+      // 通话中：恢复语音识别；纯文字模式：回到就绪态
+      if (inCall) {
+        startListening();
+      } else {
+        setState(State.IDLE);
+        el.status.textContent = textChat.active ? '继续输入文字聊天，或点麦克风语音通话' : '';
+      }
     }
   }
 }
@@ -619,6 +696,30 @@ function stashCurrentChat() {
   el.subtitleAI.textContent = '';
   el.transcriptList.innerHTML = '';
   messages = [];
+}
+
+// 导出当前对话为 Markdown 文件
+function exportTranscript() {
+  if (!messages || messages.length === 0) return;
+  const charName = activeChar.name;
+  const date = new Date();
+  const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  let md = `# 与 ${charName} 的对话\n\n> 导出时间：${date.toLocaleString('zh-CN')}\n\n---\n\n`;
+  for (const m of messages) {
+    if (!m || !m.content) continue;
+    const speaker = m.role === 'user' ? '🧑 我' : `💬 ${charName}`;
+    const text = cleanActionParens(m.content);
+    md += `**${speaker}**\n\n${text}\n\n`;
+  }
+  const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `对话_${charName}_${dateStr}.md`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 // 清空当前会话（记录 + 消息 + 持久化，清空按钮 / 重置时调用）
@@ -756,17 +857,23 @@ async function loadCloneRef(url) {
   try {
     const res = await fetch(url);
     const blob = await res.blob();
-    const dataURI = await new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result);
-      reader.readAsDataURL(blob);
-    });
+    const dataURI = await blobToDataURI(blob);
     cloneRefCache.set(url, dataURI);
     return dataURI;
   } catch (e) {
     console.warn('加载克隆参考音频失败:', e);
     return null;
   }
+}
+
+// Blob → dataURI（用于把已下载到本地的克隆参考音频喂给 TTS）
+function blobToDataURI(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
 }
 
 function applyTTSSettings() {
@@ -786,14 +893,21 @@ function applyTTSSettings() {
     console.warn('声音克隆失败，已回退预置音色:', e.message || e);
   };
   if (vc && vc.ref && vc.text && config.voiceCloneEnabled !== false && config.siliconFlowApiKey) {
-    cloneRefReady = loadCloneRef(vc.ref).then(dataURI => {
+    cloneRefReady = (async () => {
+      let dataURI = null;
+      // 已下载到本地的角色：优先用本地克隆音频（离线/秒开）
+      if (isDownloaded(activeChar.id)) {
+        const assets = await getAssets(activeChar.id);
+        if (assets && assets.clone) dataURI = await blobToDataURI(assets.clone);
+      }
+      if (!dataURI) dataURI = await loadCloneRef(vc.ref);
       if (dataURI && tts) {
         tts.setCloneReference({ audio: dataURI, text: vc.text });
         tts.setCloneNoInstruct(!!activeChar.cloneNoInstruct);
         return true;
       }
       return false;
-    });
+    })();
   } else {
     cloneRefReady = Promise.resolve(false);
     if (tts) tts.setCloneReference(null);
@@ -882,21 +996,31 @@ async function updateCurrentCharacterUI() {
   el.sideVideo.removeAttribute('src');
   el.sideVideo.load();
 
-  const media = await resolveCharMedia(activeChar.media);
+  // 已下载到本地的角色：优先用本地素材（离线可用、秒开）
+  let media = null;
+  if (isDownloaded(activeChar.id)) {
+    const assets = await getAssets(activeChar.id);
+    if (assets && assets.media) {
+      const url = URL.createObjectURL(assets.media);
+      media = { src: url, isVideo: assets.mediaType === 'video' };
+      currentMediaUrl = url;
+    }
+  }
+  if (!media) media = await resolveCharMedia(activeChar.media);
   if (!media) {
     // 默认形象：高度自适应（cover 撑满面板高度，避免 contain 上下黑边）
     el.imagePanel.classList.add('default-media');
     el.sideVideo.src = 'assets/girlfriend.mp4';
     el.sideVideo.classList.add('fit-fill');
     el.sideVideo.style.display = '';
-    el.sideVideo.play().catch(() => {});
+    el.sideVideo.play().catch((e) => console.warn('Video autoplay failed:', e));
   } else {
     el.imagePanel.classList.remove('default-media');
     el.sideVideo.classList.remove('fit-fill');
     if (media.isVideo) {
       el.sideVideo.src = media.src;
       el.sideVideo.style.display = '';
-      el.sideVideo.play().catch(() => {});
+      el.sideVideo.play().catch((e) => console.warn('Video autoplay failed:', e));
       if (isStoredMedia(activeChar.media)) currentMediaUrl = media.src;
     } else {
       const img = document.createElement('img');
@@ -907,6 +1031,9 @@ async function updateCurrentCharacterUI() {
       if (isStoredMedia(activeChar.media)) currentMediaUrl = media.src;
     }
   }
+
+  // 更新主页面下载状态徽标
+  updateDownloadBadge();
 }
 
 function switchCharacter(id) {
@@ -915,11 +1042,344 @@ function switchCharacter(id) {
   if (idx >= 0) switchTo(idx - list.findIndex(c => c.id === activeChar.id));
 }
 
+// ===== 角色库（所有角色 + 按需下载素材） =====
+const downloadingIds = new Set();
+
+// 主页面角色标识区的下载状态徽标
+function updateDownloadBadge() {
+  const badge = el.charDownloadBadge;
+  if (!badge) return;
+  const { mediaUrl, cloneUrl } = getRemoteAssetURLs(activeChar);
+  const downloadable = !!(mediaUrl || cloneUrl);
+  if (!downloadable) {
+    badge.textContent = '本地角色';
+    badge.className = 'char-download-badge local';
+    badge.disabled = true;
+  } else if (isDownloaded(activeChar.id)) {
+    badge.textContent = '已下载 ✓';
+    badge.className = 'char-download-badge done';
+    badge.disabled = false;
+  } else {
+    badge.textContent = '未下载';
+    badge.className = 'char-download-badge todo';
+    badge.disabled = false;
+  }
+}
+
+// Helen（girlfriend 预设）默认提前下载素材，后台静默执行
+async function autoDownloadHelen() {
+  const HELEN_ID = 'girlfriend';
+  if (isDownloaded(HELEN_ID)) return;
+  const char = getCharacters().find(c => c.id === HELEN_ID);
+  if (!char) return;
+  const { mediaUrl, cloneUrl } = getRemoteAssetURLs(char);
+  if (!mediaUrl && !cloneUrl) return;
+  downloadingIds.add(HELEN_ID);
+  try {
+    await downloadCharacterAssets(char);
+    markDownloaded(HELEN_ID);
+    // 若当前正在查看 Helen，刷新主页面媒体
+    if (activeChar.id === HELEN_ID) {
+      updateCurrentCharacterUI();
+    }
+  } catch (e) {
+    console.warn('Helen 自动下载失败:', e);
+  } finally {
+    downloadingIds.delete(HELEN_ID);
+  }
+}
+
+function openCharactersPage() {
+  renderCharactersPage();
+  el.charactersPage.classList.add('show');
+  trapFocus(el.charactersPage);
+}
+
+function closeCharactersPage() {
+  el.charactersPage.classList.remove('show');
+  releaseFocus(el.charactersPage);
+  // 关闭页面时同步关闭编辑面板
+  closeCharacterModal();
+}
+
+// 构建角色卡片媒体预览（视频/图片缩略图）
+async function buildCardMedia(char, container) {
+  let mediaEl = null;
+  let cardBlobUrl = null;
+
+  // 已下载到本地的角色：用本地素材做预览
+  if (isDownloaded(char.id)) {
+    const assets = await getAssets(char.id);
+    if (assets && assets.media) {
+      cardBlobUrl = URL.createObjectURL(assets.media);
+      if (assets.mediaType === 'video') {
+        mediaEl = document.createElement('video');
+        mediaEl.src = cardBlobUrl;
+        mediaEl.muted = true;
+        mediaEl.loop = true;
+        mediaEl.autoplay = true;
+        mediaEl.playsInline = true;
+        mediaEl.preload = 'metadata';
+      } else {
+        mediaEl = document.createElement('img');
+        mediaEl.src = cardBlobUrl;
+      }
+    }
+  }
+
+  // 没有本地素材：尝试远程路径或 db: 引用
+  if (!mediaEl) {
+    const media = await resolveCharMedia(char.media);
+    if (media) {
+      if (media.isVideo) {
+        mediaEl = document.createElement('video');
+        mediaEl.src = media.src;
+        mediaEl.muted = true;
+        mediaEl.loop = true;
+        mediaEl.autoplay = true;
+        mediaEl.playsInline = true;
+        mediaEl.preload = 'metadata';
+      } else {
+        mediaEl = document.createElement('img');
+        mediaEl.src = media.src;
+      }
+    }
+  }
+
+  // 默认形象：使用 girlfriend.mp4
+  if (!mediaEl && isPreset(char.id)) {
+    mediaEl = document.createElement('video');
+    mediaEl.src = 'assets/girlfriend.mp4';
+    mediaEl.muted = true;
+    mediaEl.loop = true;
+    mediaEl.autoplay = true;
+    mediaEl.playsInline = true;
+    mediaEl.preload = 'metadata';
+  }
+
+  if (mediaEl) {
+    if (cardBlobUrl) mediaEl.dataset.blobUrl = cardBlobUrl;
+    container.appendChild(mediaEl);
+  } else {
+    const empty = document.createElement('div');
+    empty.className = 'char-card-media-empty';
+    container.appendChild(empty);
+  }
+}
+
+// 清理角色卡片网格中的 blob URL（重新渲染前调用）
+function clearCharGrid(grid) {
+  grid.querySelectorAll('[data-blob-url]').forEach((el) => {
+    URL.revokeObjectURL(el.dataset.blobUrl);
+  });
+  grid.innerHTML = '';
+}
+
+function buildCharacterCard(char) {
+  const { mediaUrl, cloneUrl } = getRemoteAssetURLs(char);
+  const downloadable = !!(mediaUrl || cloneUrl);
+  const isActive = char.id === activeChar.id;
+
+  const card = document.createElement('div');
+  card.className = 'char-full-card' + (isActive ? ' is-active' : '');
+
+  // 媒体预览区
+  const mediaDiv = document.createElement('div');
+  mediaDiv.className = 'char-card-media';
+  buildCardMedia(char, mediaDiv);
+  card.appendChild(mediaDiv);
+
+  // 卡片内容
+  const body = document.createElement('div');
+  body.className = 'char-card-body';
+
+  // 第一行：名称 + 标签
+  const row1 = document.createElement('div');
+  row1.className = 'char-card-row1';
+  const nameWrap = document.createElement('div');
+  nameWrap.className = 'char-card-name-wrap';
+  const nameSpan = document.createElement('span');
+  nameSpan.className = 'char-card-name';
+  nameSpan.textContent = char.name;
+  nameWrap.appendChild(nameSpan);
+  const tag = document.createElement('span');
+  tag.className = 'char-card-tag' + (isActive ? ' active-now' : '');
+  tag.textContent = isActive ? '当前' : (isPreset(char.id) ? '默认' : '自建');
+  row1.appendChild(nameWrap);
+  row1.appendChild(tag);
+  body.appendChild(row1);
+
+  // 第二行：人设描述预览（截断显示）
+  if (char.systemPrompt) {
+    const promptDiv = document.createElement('div');
+    promptDiv.className = 'char-card-prompt';
+    promptDiv.textContent = char.systemPrompt.replace(/\n/g, ' ');
+    body.appendChild(promptDiv);
+  }
+
+  // 第三行：元信息（音色 + 下载状态）
+  const meta = document.createElement('div');
+  meta.className = 'char-card-meta';
+  const voiceInfo = document.createElement('span');
+  voiceInfo.className = 'char-card-voice';
+  const voiceName = char.ttsVoice
+    ? (SF_VOICES.find(v => v.id === char.ttsVoice)?.name || char.ttsVoice)
+    : '默认女声';
+  voiceInfo.textContent = voiceName;
+  meta.appendChild(voiceInfo);
+  if (char.voiceClone && char.voiceClone.ref) {
+    const cloneTag = document.createElement('span');
+    cloneTag.className = 'char-card-voice';
+    cloneTag.textContent = '克隆';
+    meta.appendChild(cloneTag);
+  }
+  const dlBadge = document.createElement('span');
+  dlBadge.className = 'char-card-dl-badge';
+  if (!downloadable) {
+    dlBadge.classList.add('local');
+    dlBadge.textContent = '本地';
+  } else if (isDownloaded(char.id)) {
+    dlBadge.classList.add('done');
+    dlBadge.textContent = '已下载';
+  } else {
+    dlBadge.classList.add('todo');
+    dlBadge.textContent = '未下载';
+  }
+  meta.appendChild(dlBadge);
+  body.appendChild(meta);
+
+  // 操作按钮
+  const actions = document.createElement('div');
+  actions.className = 'char-card-actions';
+
+  // 切换到此角色
+  if (!isActive) {
+    const switchBtn = document.createElement('button');
+    switchBtn.className = 'char-card-btn primary';
+    switchBtn.textContent = '切换';
+    switchBtn.addEventListener('click', () => {
+      switchCharacter(char.id);
+      closeCharactersPage();
+    });
+    actions.appendChild(switchBtn);
+  } else {
+    const currentBtn = document.createElement('button');
+    currentBtn.className = 'char-card-btn';
+    currentBtn.textContent = '当前';
+    currentBtn.disabled = true;
+    actions.appendChild(currentBtn);
+  }
+
+  // 编辑
+  const editBtn = document.createElement('button');
+  editBtn.className = 'char-card-btn';
+  editBtn.textContent = '编辑';
+  editBtn.addEventListener('click', () => openCharacterModal(char.id));
+  actions.appendChild(editBtn);
+
+  // 下载/重新下载
+  if (downloadable) {
+    const dlBtn = document.createElement('button');
+    dlBtn.className = 'char-card-btn';
+    if (isDownloaded(char.id)) {
+      dlBtn.classList.add('done-btn');
+      dlBtn.textContent = '重新下载';
+      dlBtn.title = '点击重新下载';
+    } else {
+      dlBtn.textContent = '下载';
+    }
+    dlBtn.addEventListener('click', () => downloadCharacter(char.id, dlBtn));
+    actions.appendChild(dlBtn);
+  }
+
+  body.appendChild(actions);
+  card.appendChild(body);
+
+  return card;
+}
+
+function renderCharactersPage(searchQuery) {
+  const list = getCharacters();
+  const query = (searchQuery || '').trim().toLowerCase();
+  const filtered = query
+    ? list.filter((c) => {
+        const name = (c.name || '').toLowerCase();
+        const prompt = (c.systemPrompt || '').toLowerCase();
+        return name.includes(query) || prompt.includes(query);
+      })
+    : list;
+  const presets = filtered.filter((c) => isPreset(c.id));
+  const custom = filtered.filter((c) => !isPreset(c.id));
+
+  clearCharGrid(el.charGridPresets);
+  clearCharGrid(el.charGridCustom);
+
+  if (presets.length === 0 && custom.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'char-grid-empty';
+    empty.textContent = `没有找到匹配"${searchQuery}"的角色`;
+    el.charGridPresets.appendChild(empty);
+    return;
+  }
+
+  presets.forEach((c) => el.charGridPresets.appendChild(buildCharacterCard(c)));
+
+  if (custom.length === 0) {
+    if (!query) {
+      const empty = document.createElement('div');
+      empty.className = 'char-grid-empty';
+      empty.textContent = '还没有创建角色，点击右上角「新建角色」';
+      el.charGridCustom.appendChild(empty);
+    }
+  } else {
+    custom.forEach((c) => el.charGridCustom.appendChild(buildCharacterCard(c)));
+  }
+}
+
+async function downloadCharacter(id, btn) {
+  if (downloadingIds.has(id)) return;
+  const char = getCharacters().find((c) => c.id === id);
+  if (!char) return;
+
+  downloadingIds.add(id);
+  btn.disabled = true;
+  const originalText = btn.textContent;
+  btn.textContent = '下载中…';
+  try {
+    await downloadCharacterAssets(char, {
+      onProgress: (done, total) => {
+        btn.textContent = `下载中 ${Math.round((done / total) * 100)}%`;
+      },
+    });
+    markDownloaded(id);
+    btn.textContent = '已下载 ✓';
+    btn.classList.add('done-btn');
+    btn.title = '点击重新下载';
+    // 若正在查看该角色，立即刷新主页面媒体与徽标
+    if (activeChar.id === id) {
+      updateCurrentCharacterUI();
+    } else {
+      updateDownloadBadge();
+    }
+    // 刷新角色页面的卡片
+    if (el.charactersPage.classList.contains('show')) {
+      renderCharactersPage();
+    }
+  } catch (e) {
+    console.warn('下载角色素材失败:', e);
+    btn.textContent = '下载失败，重试';
+    btn.disabled = false;
+  } finally {
+    downloadingIds.delete(id);
+    if (!isDownloaded(id)) btn.disabled = false;
+  }
+}
+
 // ===== 角色切换动画（滑动 / 按钮共用） =====
-const SWIPE_DURATION = 280; // 转场动画时长 ms
+const SWIPE_DURATION = 280; // 移动端滑入动画时长 ms
 let charAnimating = false;  // 转场进行中：禁止再次手势/点击，避免叠动画
 
-// 设置形象面板 transform（duration 传 null 表示无过渡，用于定位初始位置）
+// 设置形象面板 transform（移动端滑动专用；duration 传 null 表示无过渡，用于定位初始位置）
 function setPanelTransform(transform, duration) {
   el.imagePanel.style.transition = duration != null
     ? `transform ${duration}ms cubic-bezier(.22,.61,.36,1)`
@@ -927,17 +1387,46 @@ function setPanelTransform(transform, duration) {
   el.imagePanel.style.transform = transform;
 }
 
-// 点击按钮切换：切角色后，新卡从反方向滑入
+// 桌面端点击切换：溶解模糊过渡（淡出+模糊 → 切换 → 淡入+去模糊）
 function animateSwitchTo(dir) {
   if (charAnimating) return;
   charAnimating = true;
-  switchTo(dir);
-  // 新卡初始在反方向屏幕外（无过渡），双 rAF 确保重排后播放滑入
-  setPanelTransform(`translateX(${dir * -100}%)`, null);
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    setPanelTransform('', SWIPE_DURATION);
-    setTimeout(() => { charAnimating = false; }, SWIPE_DURATION + 40);
-  }));
+
+  const panel = el.imagePanel;
+  const FADE_OUT = 180;
+  const FADE_IN = 340;
+
+  // Phase 1：旧画面溶解淡出（opacity ↓ + blur ↑ + 微缩放）
+  panel.style.transition = `opacity ${FADE_OUT}ms ease, filter ${FADE_OUT}ms ease, transform ${FADE_OUT}ms ease`;
+  panel.style.opacity = '0';
+  panel.style.filter = 'blur(14px)';
+  panel.style.transform = 'scale(1.04)';
+
+  setTimeout(() => {
+    // Phase 2：切换角色（内部更新媒体、名称、音色等）
+    switchTo(dir);
+
+    // Phase 3：新画面初始态（不可见、模糊、微缩小），无过渡
+    panel.style.transition = 'none';
+    panel.style.opacity = '0';
+    panel.style.filter = 'blur(14px)';
+    panel.style.transform = 'scale(0.97)';
+
+    // Phase 4：双 rAF 后新画面溶解淡入（opacity ↑ + blur ↓ + 缩放恢复）
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      panel.style.transition = `opacity ${FADE_IN}ms ease, filter ${FADE_IN}ms ease, transform ${FADE_IN}ms cubic-bezier(.22,.61,.36,1)`;
+      panel.style.opacity = '1';
+      panel.style.filter = 'blur(0px)';
+      panel.style.transform = 'scale(1)';
+
+      setTimeout(() => {
+        charAnimating = false;
+        panel.style.transition = '';
+        panel.style.filter = '';
+        panel.style.transform = '';
+      }, FADE_IN + 40);
+    }));
+  }, FADE_OUT + 20);
 }
 
 // ===== 移动端：角色页面左右滑动切换（滑出旧卡 → 滑入新卡） =====
@@ -1071,6 +1560,11 @@ let editingCharId = null;
 let mediaPicker = null;
 
 function openCharacterModal(editId) {
+  // 确保角色页面已打开（从主页面点击编辑/新建时自动打开）
+  if (!el.charactersPage.classList.contains('show')) {
+    renderCharactersPage();
+    el.charactersPage.classList.add('show');
+  }
   editingCharId = editId;
   const char = editId ? getCharacters().find(c => c.id === editId) : null;
   el.characterModalTitle.textContent = char ? '编辑人物' : '创建角色';
@@ -1101,7 +1595,6 @@ function openCharacterModal(editId) {
   if (!mediaPicker) {
     mediaPicker = new MediaPicker(el.charMediaPicker, {
       getSFApiKey: () => config.siliconFlowApiKey || '',
-      onRequestApiKey: openSettings,
     });
   }
   mediaPicker.setValue(char ? (char.media || '') : '');
@@ -1139,6 +1632,7 @@ async function saveCharacter() {
     activeChar = getActiveCharacter();
     updateCurrentCharacterUI();
     closeCharacterModal();
+    renderCharactersPage();
     return;
   }
 
@@ -1170,6 +1664,7 @@ async function saveCharacter() {
   messages = [];
   refreshMemoryPanel();
   closeCharacterModal();
+  renderCharactersPage();
 }
 
 // 生成纯黑背景的人物形象图 prompt
@@ -1216,21 +1711,19 @@ function toggleMemoryPanel() {
 // ===== 设置面板 =====
 function openSettings() {
   el.settingsModal.classList.add('show');
-  el.apiKeyInput.value = config.apiKey;
-  // 硅基流动 Key（语音合成 / 声音克隆）
-  el.sfApiKeyInput.value = config.siliconFlowApiKey || '';
-  el.interruptToggle.checked = config.allowInterrupt;
+  el.interruptToggle.checked = config.allowInterrupt !== false;
   el.memoryToggle.checked = config.memoryEnabled !== false;
   el.voiceCloneToggle.checked = config.voiceCloneEnabled !== false;
+  trapFocus(el.settingsModal);
 }
 
 function closeSettings() {
   el.settingsModal.classList.remove('show');
+  releaseFocus(el.settingsModal);
 }
 
 function saveSettings() {
-  config.apiKey = el.apiKeyInput.value.trim();
-  config.siliconFlowApiKey = el.sfApiKeyInput.value.trim();
+  // API Key 由 config.js 内置，设置里不再填写；读取开关状态即可
   config.allowInterrupt = el.interruptToggle.checked;
   config.memoryEnabled = el.memoryToggle.checked;
   config.voiceCloneEnabled = el.voiceCloneToggle.checked;
@@ -1244,7 +1737,7 @@ function saveSettings() {
     // 通话中开启了打断功能
     volumeMonitor = new VolumeMonitor();
     volumeMonitor.onInterrupt = handleInterrupt;
-    volumeMonitor.start().catch(() => { volumeMonitor = null; });
+    volumeMonitor.start().catch((e) => { console.warn('VolumeMonitor 启动失败:', e); volumeMonitor = null; });
   } else if (inCall && !config.allowInterrupt && volumeMonitor) {
     volumeMonitor.stop();
     volumeMonitor = null;
@@ -1256,10 +1749,11 @@ function init() {
   // 语音状态光球：纯 WebGL 着色器球，无鼠标 hover（由语音状态驱动）
   orb = new Orb(el.statusOrb, { backgroundColor: '#000000' });
   orb.setState(State.IDLE);
+  syncOrbIcon(); // 初始为正常麦克风图标
   if (!isASRSupported()) {
     el.status.textContent = '浏览器不支持语音识别，请使用 Chrome 或 Edge';
-    el.callBtn.disabled = true;
-    el.callBtn.style.opacity = '0.4';
+    el.statusOrb.disabled = true;
+    el.statusOrb.style.opacity = '0.4';
     return;
   }
 
@@ -1273,26 +1767,19 @@ function init() {
 
   updateCurrentCharacterUI();
 
+  // Helen（girlfriend）默认自动下载素材，其它角色按需下载
+  autoDownloadHelen();
+
   // 首次进入：恢复当前角色的历史会话
   const saved = loadChat(activeChar.id);
   messages = saved || [];
   renderTranscript(messages, activeChar.name);
   if (saved && saved.length > 0) el.transcriptPanel.classList.add('expanded');
 
-  // 麦克风按钮：开始通话
-  el.callBtn.addEventListener('click', () => {
-    if (!inCall) startCall();
-  });
-
-  // 停止按钮：结束通话
-  el.stopBtn.addEventListener('click', () => {
-    if (inCall) endCall();
-  });
-
-  // 中间光球：暂停 / 继续通话
+  // 中间控件：点击说话 / 再次点击暂停（未通话 = 开始通话）
   el.statusOrb.addEventListener('click', togglePause);
   el.statusOrb.style.cursor = 'pointer';
-  el.statusOrb.title = '点击暂停 / 继续';
+  el.statusOrb.title = '点击说话 / 暂停';
 
   // 设置
   el.settingsBtn.addEventListener('click', openSettings);
@@ -1305,8 +1792,6 @@ function init() {
   // 人物管理：左右切换（带滑入动画；移动端滑动手势共用同一动画逻辑）
   el.charPrev.addEventListener('click', () => animateSwitchTo(-1));
   el.charNext.addEventListener('click', () => animateSwitchTo(1));
-  // 编辑当前角色（内置角色也可调整音色/语速/音调/人设等）
-  el.charEditBtn.addEventListener('click', () => openCharacterModal(activeChar.id));
   // 角色名快捷编辑
   el.callName.addEventListener('click', startRename);
   el.callNameInput.addEventListener('keydown', (e) => {
@@ -1319,7 +1804,6 @@ function init() {
     }
   });
   el.callNameInput.addEventListener('blur', commitRename);
-  el.addCharacterBtn.addEventListener('click', () => openCharacterModal(null));
   el.closeCharacterBtn.addEventListener('click', closeCharacterModal);
   el.saveCharacterBtn.addEventListener('click', saveCharacter);
   el.deleteCharacterBtn.addEventListener('click', () => {
@@ -1345,11 +1829,20 @@ function init() {
         el.status.textContent = `已切换到 ${activeChar.name}`;
       }
       closeCharacterModal();
+      renderCharactersPage();
     }
   });
   el.characterModal.addEventListener('click', (e) => {
     if (e.target === el.characterModal) closeCharacterModal();
   });
+
+  // 所有角色页面（全屏）
+  el.allCharactersBtn.addEventListener('click', openCharactersPage);
+  el.closeCharactersBtn.addEventListener('click', closeCharactersPage);
+  el.pageAddCharBtn.addEventListener('click', () => openCharacterModal(null));
+  if (el.charDownloadBadge) {
+    el.charDownloadBadge.addEventListener('click', openCharactersPage);
+  }
 
   // 滑块（人物编辑：语速/音调）
   if (el.charRateSlider) {
@@ -1360,71 +1853,54 @@ function init() {
       el.charPitchValue.textContent = parseFloat(el.charPitchSlider.value).toFixed(1);
     });
   }
+  // 测试 DeepSeek（LLM 对话，key 已内置）
   el.testBtn.addEventListener('click', async () => {
-    const key = el.apiKeyInput.value.trim();
-    if (!key) {
-      el.testResult.textContent = '请输入 API Key';
-      el.testResult.className = 'test-result error';
-      return;
-    }
     el.testResult.textContent = '测试中...';
-    el.testResult.className = 'test-result';
+    el.testResult.className = 'test-result-box';
     try {
-      const reply = await testConnection(key);
+      const reply = await testConnection(config.apiKey);
       el.testResult.textContent = `成功: ${reply}`;
-      el.testResult.className = 'test-result success';
+      el.testResult.className = 'test-result-box success';
     } catch (e) {
       el.testResult.textContent = `失败: ${e.message}`;
-      el.testResult.className = 'test-result error';
+      el.testResult.className = 'test-result-box error';
     }
   });
 
-  // 测试语音合成（硅基流动；未填则直接测当前角色的克隆音色）
+  // 测试语音合成（硅基流动；key 已内置）
   el.testSFBtn.addEventListener('click', async () => {
-    const sfKey = el.sfApiKeyInput.value.trim();
-    if (!sfKey) {
-      el.testResult.textContent = '请填写硅基流动 API Key';
-      el.testResult.className = 'test-result error';
-      return;
-    }
     el.testResult.textContent = '测试中...';
-    el.testResult.className = 'test-result';
+    el.testResult.className = 'test-result-box';
     try {
-      await testSFConnection(sfKey, activeChar.ttsVoice || 'claire');
+      await testSFConnection(config.siliconFlowApiKey, activeChar.ttsVoice || 'claire');
       el.testResult.textContent = '语音合成连接成功';
-      el.testResult.className = 'test-result success';
+      el.testResult.className = 'test-result-box success';
     } catch (e) {
       el.testResult.textContent = `失败: ${e.message}`;
-      el.testResult.className = 'test-result error';
+      el.testResult.className = 'test-result-box error';
     }
   });
 
   // 测试声音克隆：当前角色有克隆参考时，直接用克隆模式合成一句中文并播放
   el.testCloneBtn.addEventListener('click', async () => {
-    const key = el.sfApiKeyInput.value.trim();
     const vc = activeChar.voiceClone;
-    if (!key) {
-      el.testResult.textContent = '请输入硅基流动 API Key';
-      el.testResult.className = 'test-result error';
-      return;
-    }
     if (!vc || !vc.ref || !vc.text) {
       el.testResult.textContent = `当前角色（${activeChar.name}）无克隆参考音频`;
-      el.testResult.className = 'test-result error';
+      el.testResult.className = 'test-result-box error';
       return;
     }
     el.testResult.textContent = '克隆合成中...';
-    el.testResult.className = 'test-result';
+    el.testResult.className = 'test-result-box';
     try {
       const dataURI = await loadCloneRef(vc.ref);
       if (!dataURI) throw new Error('参考音频加载失败');
       const { testCloneConnection } = await import('./tts.js');
-      await testCloneConnection(key, dataURI, vc.text, !!activeChar.cloneNoInstruct);
+      await testCloneConnection(config.siliconFlowApiKey, dataURI, vc.text, !!activeChar.cloneNoInstruct);
       el.testResult.textContent = `克隆成功，正在用${activeChar.name}的音色播放`;
-      el.testResult.className = 'test-result success';
+      el.testResult.className = 'test-result-box success';
     } catch (e) {
       el.testResult.textContent = `失败: ${e.message}`;
-      el.testResult.className = 'test-result error';
+      el.testResult.className = 'test-result-box error';
     }
   });
 
@@ -1434,6 +1910,9 @@ function init() {
     clearConversation();
     setState(State.IDLE);
   });
+
+  // 导出对话
+  el.exportTranscriptBtn.addEventListener('click', exportTranscript);
 
   // 文字输入
   el.sendBtn.addEventListener('click', sendTextMessage);
@@ -1452,7 +1931,67 @@ function init() {
       refreshMemoryPanel();
     }
   });
+  // 角色搜索
+  if (el.charSearchInput) {
+    el.charSearchInput.addEventListener('input', () => {
+      renderCharactersPage(el.charSearchInput.value);
+    });
+  }
+
   refreshMemoryPanel();
+
+  // ===== 键盘快捷键 =====
+  document.addEventListener('keydown', (e) => {
+    const isTyping = el.textInput === document.activeElement || el.charNameInput === document.activeElement || el.charPromptInput === document.activeElement || el.charSearchInput === document.activeElement || el.callNameInput === document.activeElement;
+    if (isTyping) return;
+
+    // Escape：关闭弹窗/页面
+    if (e.key === 'Escape') {
+      if (el.settingsModal.classList.contains('show')) { closeSettings(); return; }
+      if (el.charactersPage.classList.contains('show')) { closeCharactersPage(); return; }
+      if (el.characterModal.classList.contains('show')) { closeCharacterModal(); return; }
+    }
+
+    // Ctrl+,：打开设置
+    if (e.ctrlKey && e.key === ',') {
+      e.preventDefault();
+      openSettings();
+      return;
+    }
+
+    // Ctrl+ArrowLeft / Ctrl+ArrowRight：切换角色
+    if (e.ctrlKey && e.key === 'ArrowLeft') {
+      e.preventDefault();
+      animateSwitchTo(-1);
+      return;
+    }
+    if (e.ctrlKey && e.key === 'ArrowRight') {
+      e.preventDefault();
+      animateSwitchTo(1);
+      return;
+    }
+
+    // Space：点击说话 / 暂停
+    if (e.key === ' ' && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      el.statusOrb.click();
+      return;
+    }
+
+    // Ctrl+K：打开所有角色页面
+    if (e.ctrlKey && (e.key === 'k' || e.key === 'K')) {
+      e.preventDefault();
+      openCharactersPage();
+      return;
+    }
+  });
 }
 
 init();
+
+// 页面卸载时释放 WebGL 资源
+window.addEventListener('beforeunload', () => {
+  if (orb) orb.destroy();
+  if (volumeMonitor) volumeMonitor.stop();
+  if (tts) tts.stop();
+});
